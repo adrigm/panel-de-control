@@ -399,6 +399,9 @@ export interface ControllerConfig {
   // `buttons` is empty and the UI shows an honest "not calibrated" note.
   device_known?: boolean;
   buttons?: RemapButton[];
+  global_buttons?: RemapButton[];
+  has_game_profile?: boolean;
+  appid?: string | null;
   gamepad_targets?: string[];
   key_targets?: string[];
   // settings (HHD)
@@ -425,7 +428,7 @@ export const submitReport =
 
 export const getControllerConfig = callable<[], ControllerConfig>("get_controller_config");
 export const setControllerButton =
-  callable<[source: string, targets: ControllerTarget[]], ControllerConfig>("set_controller_button");
+  callable<[source: string, targets: ControllerTarget[], scope: Scope, appid: string | null], ControllerConfig>("set_controller_button");
 export const setControllerSetting =
   callable<[field: string, value: string], ControllerConfig>("set_controller_setting");
-export const resetController = callable<[], ControllerConfig>("reset_controller");
+export const resetController = callable<[scope: Scope, appid: string | null], ControllerConfig>("reset_controller");

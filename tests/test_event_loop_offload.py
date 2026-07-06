@@ -138,8 +138,8 @@ def test_reapply_all_offloads_tdp_fans_and_color(tmp_path, monkeypatch):
         p._reapply_all()  # sync, but under a running loop
 
     asyncio.run(_run())
-    # tdp + fans + color offloaded; charge/cpu/gpu-clock stay inline (sysfs).
-    assert rec.count == 3
+    # tdp + controller + fans + color offloaded; charge/cpu/gpu-clock stay inline.
+    assert rec.count == 4
 
 
 def test_set_saturation_applies_color_off_loop(tmp_path, monkeypatch):

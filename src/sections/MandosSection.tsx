@@ -19,8 +19,9 @@ import {
   valueToTarget,
 } from "../mandos/logic";
 import { Loading } from "../components/Loading";
+import { ProfileSelector } from "../components/ProfileSelector";
+import { useRunningGame } from "../tdp/useRunningGame";
 
-/** Raised card chrome with a titled header row. */
 const Card: FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
   <div style={{ ...theme.card, padding: theme.space.md, overflow: "hidden" }}>
     <div
@@ -40,9 +41,6 @@ const Card: FC<{ title: string; children: React.ReactNode }> = ({ title, childre
   </div>
 );
 
-/** A labelled control: a small muted caption above a full-width control. Vertical
- *  so the dropdown never fights the label for width in the narrow QAM (the old
- *  side-by-side layout overflowed the card). */
 const Row: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: theme.space.xs, padding: `${theme.space.xs}px 0` }}>
     <span style={{ fontSize: theme.font.caption, color: theme.color.textMuted, letterSpacing: 0.2 }}>
@@ -52,10 +50,6 @@ const Row: FC<{ label: string; children: React.ReactNode }> = ({ label, children
   </div>
 );
 
-/** A remap entry: the physical button's silkscreen legend (Y1/M1…) as a keycap
- *  chip beside its target selector. Silkscreen names are short, so a horizontal
- *  keycap + dropdown reads like a controller legend and matches the plugin's pill
- *  aesthetic — nicer than a plain full-width dropdown row. */
 const RemapRow: FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div
     style={{
@@ -92,38 +86,39 @@ const RemapRow: FC<{ label: string; children: React.ReactNode }> = ({ label, chi
   </div>
 );
 
-/**
- * Mandos — controller manager hub.
- *
- * Cooperates with whichever daemon owns the gamepad (Handheld Daemon on Bazzite,
- * InputPlumber on SteamOS) — we never grab evdev ourselves. On InputPlumber we
- * offer a real per-button remap editor; on HHD we expose its controller settings
- * (mode + paddle behavior), since HHD delegates fine per-game remap to Steam
- * Input. When no manager is present we say so honestly.
- */
 export const MandosSection: FC = () => {
   const { t } = useI18n();
+  const game = useRunningGame();
   const [config, setConfig] = useState<ControllerConfig | null>(null);
+  const [scope, setScope] = useState<"global" | "game">("global");
 
   useEffect(() => {
     getControllerConfig().then(setConfig).catch(() => {});
   }, []);
 
+  const appid = game?.appid;
+  useEffect(() => {
+    setScope(appid ? "game" : "global");
+    getControllerConfig().then(setConfig).catch(() => {});
+  }, [appid]);
+
   if (!config) return <Loading />;
 
   const manager = config.manager;
   const version = config.manager_version;
+  const targetAppid = game?.appid ?? null;
+  const targetScope = scope === "game" && targetAppid ? "game" : "global";
 
-  const onSetButton = (source: string, value: string) =>
-    // Empty value = the "Default" option → send no targets so the backend reverts
-    // this one button to the device default.
-    setControllerButton(source, value ? [valueToTarget(value)] : []).then(setConfig).catch(() => {});
+  const onSetButton = (source: string, value: string) => {
+    setControllerButton(source, value ? [valueToTarget(value)] : [], targetScope, targetAppid)
+      .then(setConfig)
+      .catch(() => {});
+  };
   const onSetSetting = (field: string, value: string) =>
     setControllerSetting(field, value).then(setConfig).catch(() => {});
-  const onReset = () => resetController().then(setConfig).catch(() => {});
+  const onReset = () =>
+    resetController(targetScope, targetAppid).then(setConfig).catch(() => {});
 
-  // Dropdown options: a "Default" entry (empty value → backend reverts that one
-  // button to the device default) plus grouped buttons + keys.
   const targetGroups = [
     { data: "", label: t("mandos.remap.default") },
     {
@@ -147,13 +142,13 @@ export const MandosSection: FC = () => {
     return v === key ? fallback : v;
   };
 
-  // Remappable physical buttons (empty for non-remap configs / unknown devices).
-  const buttons = config.buttons ?? [];
+  const buttons = scope === "global"
+    ? (config.global_buttons ?? config.buttons ?? [])
+    : (config.buttons ?? []);
 
   return (
     <PanelSectionRow>
       <div style={{ display: "flex", flexDirection: "column", gap: theme.space.section, marginTop: theme.space.section }}>
-        {/* Manager status — honest, reads the live system. */}
         <Card title={t("mandos.title")}>
           <div style={{ display: "flex", alignItems: "baseline", gap: theme.space.xs }}>
             <span style={{ fontSize: theme.font.caption, color: theme.color.textMuted }}>
@@ -171,11 +166,19 @@ export const MandosSection: FC = () => {
           </div>
         </Card>
 
-        {/* InputPlumber: real per-button remap editor. */}
         {config.kind === "remap" && (
           <Card title={t("mandos.remap.title")}>
+            <div style={{ marginBottom: theme.space.sm }}>
+              <ProfileSelector
+                scope={scope}
+                gameName={game?.name ?? null}
+                hasGameProfile={config.has_game_profile ?? false}
+                globalLabel={t("tdp.scope.global")}
+                inheritHint={t("mandos.remap.inherit")}
+                onScope={setScope}
+              />
+            </div>
             {buttons.map((b) => (
-              // b.label is the literal silkscreen name (Y1/M2/…) — render as-is.
               <RemapRow key={b.source} label={b.label}>
                 <Dropdown
                   rgOptions={targetGroups}
@@ -185,9 +188,6 @@ export const MandosSection: FC = () => {
                 />
               </RemapRow>
             ))}
-            {/* Honest footnote: no buttons → why (unknown model vs a transient
-                empty-caps read, distinguished by device_known); otherwise the
-                global-scope reminder. */}
             <div style={{ fontSize: theme.font.caption, color: theme.color.textMuted, margin: `${theme.space.sm}px 0`, lineHeight: 1.4 }}>
               {buttons.length === 0
                 ? t(config.device_known === false ? "mandos.remap.uncalibrated" : "mandos.remap.nobuttons")
@@ -197,12 +197,11 @@ export const MandosSection: FC = () => {
               style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: theme.space.xs }}
               onClick={onReset}
             >
-              <LuRotateCcw size={14} /> {t("mandos.remap.reset")}
+              <LuRotateCcw size={14} /> {t(scope === "game" ? "mandos.remap.resetGame" : "mandos.remap.resetGlobal")}
             </DialogButton>
           </Card>
         )}
 
-        {/* HHD: controller settings (fine per-game remap goes to Steam Input). */}
         {config.kind === "settings" && (
           <Card title={t("mandos.settings.title")}>
             <Row label={t("mandos.mode.label")}>

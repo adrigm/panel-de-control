@@ -128,8 +128,8 @@ class Plugin:
         # Which daemon owns the controller (HHD / InputPlumber / none). Detected
         # once — the resident daemon doesn't change at runtime. Probe never raises.
         self._controller = controller_detect.detect()
-        # Cooperative controller remap: overrides store (global, IP profiles are
-        # global) + the busctl dbus driver, both owned by the InputPlumber backend.
+        # Cooperative controller remap: overrides store (global + per-game) + the
+        # busctl dbus driver, both owned by the InputPlumber backend.
         # The factory picks ONE backend for this device (HHD REST / IP dbus / none).
         self._controller_backend = controller_factory.select_controller_backend(
             self._controller,
@@ -334,7 +334,7 @@ class Plugin:
 
     def _safe_controller_config(self) -> dict:
         try:
-            return self._controller_backend.get_config()
+            return self._controller_backend.get_config(self._current_appid)
         except Exception:  # noqa: BLE001
             return {}
 
@@ -413,22 +413,26 @@ class Plugin:
     # manager / manager_version / supported so the UI needs a single round-trip.
     async def get_controller_config(self) -> dict:
         self._init()
-        return self._controller_backend.get_config()
+        return await self._offload_call(lambda: self._controller_backend.get_config(self._current_appid))
 
-    async def set_controller_button(self, source: str, targets: list) -> dict:
+    async def set_controller_button(self, source: str, targets: list, scope: str = "global", appid=None) -> dict:
         """Remap one extra button (InputPlumber devices; no-op on others)."""
         self._init()
-        return self._controller_backend.set_button(source, targets)
+        return await self._offload_call(lambda: self._controller_backend.set_button(
+            source, targets, scope, appid, self._current_appid,
+        ))
 
     async def set_controller_setting(self, field: str, value: str) -> dict:
         """Change a controller setting on HHD (mode / paddles_as; no-op on others)."""
         self._init()
         return self._controller_backend.set_setting(field, value)
 
-    async def reset_controller(self) -> dict:
+    async def reset_controller(self, scope: str = "global", appid=None) -> dict:
         """Reset remap to the device default (InputPlumber; no-op on others)."""
         self._init()
-        return self._controller_backend.reset()
+        return await self._offload_call(lambda: self._controller_backend.reset(
+            scope, appid, self._current_appid,
+        ))
 
     async def get_controller_conflict(self) -> dict:
         self._init()
@@ -1171,6 +1175,9 @@ class Plugin:
         lv, _active, ac = self._effective_levels(self._current_appid, on_ac)
         return self._tdp_backend.set_levels(lv["pl1"], lv["pl2"], lv["pl3"], ac)
 
+    def _reapply_controller(self) -> None:
+        self._controller_backend.reapply(self._current_appid)
+
     def _reapply_all(self, on_ac=None) -> None:
         """Lifecycle callback: re-assert TDP, the fan curve, the charge limit and the
         CPU controls (resume/AC — firmware may drop these across a suspend)."""
@@ -1184,6 +1191,7 @@ class Plugin:
         self._apply_cpu()
         self._apply_gpu_clock()
         self._offload(lambda: self._reapply_tdp(on_ac))
+        self._offload(self._reapply_controller)
         self._reapply_fans()   # self-offloading
         self._reapply_color()  # self-offloading
 

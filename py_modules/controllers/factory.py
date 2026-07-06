@@ -27,17 +27,20 @@ class ControllerBackend:
         cfg["supported"] = cfg.get("kind", "none") != "none"
         return cfg
 
-    def get_config(self) -> dict:
+    def get_config(self, appid=None) -> dict:
         return self._stamp({"kind": "none"})
 
-    def set_button(self, source: str, targets: list) -> dict:
-        return self.get_config()
+    def set_button(self, source: str, targets: list, scope: str = "global", appid=None, active_appid=None) -> dict:
+        return self.get_config(active_appid)
 
     def set_setting(self, field: str, value: str) -> dict:
         return self.get_config()
 
-    def reset(self) -> dict:
-        return self.get_config()
+    def reset(self, scope: str = "global", appid=None, active_appid=None) -> dict:
+        return self.get_config(active_appid)
+
+    def reapply(self, appid=None) -> bool:
+        return True
 
 
 class IpBackend(ControllerBackend):
@@ -51,14 +54,23 @@ class IpBackend(ControllerBackend):
         self._dbus = dbus
         self._device_key = device_key
 
-    def get_config(self) -> dict:
-        return self._stamp(ip.get_config(self._store, self._dbus, self._device_key))
+    def get_config(self, appid=None) -> dict:
+        return self._stamp(ip.get_config(self._store, self._dbus, self._device_key, appid))
 
-    def set_button(self, source: str, targets: list) -> dict:
-        return self._stamp(ip.set_button(self._store, self._dbus, self._device_key, source, targets))
+    def set_button(self, source: str, targets: list, scope: str = "global", appid=None, active_appid=None) -> dict:
+        return self._stamp(ip.set_button(
+            self._store, self._dbus, self._device_key, source, targets,
+            scope, appid, active_appid,
+        ))
 
-    def reset(self) -> dict:
-        return self._stamp(ip.reset(self._store, self._dbus, self._device_key))
+    def reset(self, scope: str = "global", appid=None, active_appid=None) -> dict:
+        return self._stamp(ip.reset(
+            self._store, self._dbus, self._device_key,
+            scope, appid, active_appid,
+        ))
+
+    def reapply(self, appid=None) -> bool:
+        return ip.reapply(self._store, self._dbus, appid)
 
 
 class HhdBackend(ControllerBackend):
@@ -66,7 +78,7 @@ class HhdBackend(ControllerBackend):
 
     manager = detect.HHD
 
-    def get_config(self) -> dict:
+    def get_config(self, appid=None) -> dict:
         return self._stamp(hhd_config.get_config(hhd_api.read_state()))
 
     def set_setting(self, field: str, value: str) -> dict:

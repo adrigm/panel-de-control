@@ -11,6 +11,18 @@ class FakeStore:
     def all(self):
         return {}
 
+    def effective(self, appid):
+        return {}
+
+    def has_game(self, appid):
+        return False
+
+    def replace(self, data, scope="global", appid=None):
+        pass
+
+    def reset(self, scope="global", appid=None):
+        pass
+
 
 class FakeDbus:
     def capabilities(self):

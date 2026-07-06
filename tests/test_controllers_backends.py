@@ -2,23 +2,41 @@ from controllers import hhd_config, inputplumber
 
 
 class FakeStore:
-    def __init__(self, data=None):
-        self._d = dict(data or {})
+    def __init__(self, data=None, games=None):
+        self._global = dict(data or {})
+        self._games = {str(k): dict(v) for k, v in (games or {}).items()}
 
     def all(self):
-        return dict(self._d)
+        return dict(self._global)
 
-    def set(self, s, t):
-        self._d[s] = t
+    def effective(self, appid):
+        key = str(appid) if appid is not None else None
+        if key is not None and key in self._games:
+            return dict(self._games[key])
+        return dict(self._global)
 
-    def clear(self, s):
-        self._d.pop(s, None)
+    def has_game(self, appid):
+        return appid is not None and str(appid) in self._games
 
-    def replace(self, data):
-        self._d = dict(data)
+    def set(self, s, t, scope="global", appid=None):
+        target = self._global if scope == "global" else self._games.setdefault(str(appid), dict(self._global))
+        target[s] = t
 
-    def reset(self):
-        self._d = {}
+    def clear(self, s, scope="global", appid=None):
+        target = self._global if scope == "global" else self._games.setdefault(str(appid), dict(self._global))
+        target.pop(s, None)
+
+    def replace(self, data, scope="global", appid=None):
+        if scope == "global":
+            self._global = dict(data)
+        else:
+            self._games[str(appid)] = dict(data)
+
+    def reset(self, scope="global", appid=None):
+        if scope == "global":
+            self._global = {}
+        elif appid is not None:
+            self._games.pop(str(appid), None)
 
 
 class FakeDbus:
@@ -63,6 +81,8 @@ def test_ip_get_config_lists_device_buttons_with_silkscreen_labels():
     ]
     # Untouched buttons have no override yet.
     assert all(b["target"] is None for b in cfg["buttons"])
+    assert cfg["global_buttons"] == cfg["buttons"]
+    assert cfg["has_game_profile"] is False
     assert "South" in cfg["gamepad_targets"] and "KeyEsc" in cfg["key_targets"]
 
 
@@ -86,6 +106,51 @@ def test_ip_set_button_stores_and_applies():
     assert by_src["LeftPaddle1"] == [{"gamepad": "South"}]
 
 
+def test_ip_set_button_game_profile_copies_global_then_overrides():
+    store, dbus = FakeStore({"RightPaddle1": [{"key": "KeyEsc"}]}), FakeDbus()
+    fake_merge = lambda baseline, overrides: "merged-yaml"  # noqa: E731
+    cfg = inputplumber.set_button(
+        store, dbus, CLAW, "LeftPaddle1", [{"gamepad": "South"}],
+        "game", "42", "42", merge=fake_merge,
+    )
+    assert store.has_game("42") is True
+    assert store.effective("42") == {
+        "RightPaddle1": [{"key": "KeyEsc"}],
+        "LeftPaddle1": [{"gamepad": "South"}],
+    }
+    assert cfg["appid"] == "42"
+    assert cfg["has_game_profile"] is True
+    by_src = {b["source"]: b["target"] for b in cfg["buttons"]}
+    assert by_src["LeftPaddle1"] == [{"gamepad": "South"}]
+
+
+def test_ip_set_button_default_in_game_reverts_that_game_to_device_default():
+    store, dbus = FakeStore({"LeftPaddle1": [{"gamepad": "South"}]}), FakeDbus()
+    inputplumber.set_button(store, dbus, CLAW, "LeftPaddle1", [], "game", "42", "42")
+    assert store.has_game("42") is True
+    assert "LeftPaddle1" not in store.effective("42")
+    assert store.effective(None)["LeftPaddle1"] == [{"gamepad": "South"}]
+
+
+def test_ip_global_edit_reapplies_active_game_profile_when_one_exists():
+    seen = []
+
+    def fake_merge(baseline, overrides):
+        seen.append(dict(overrides))
+        return "merged-yaml"
+
+    store = FakeStore(
+        {"LeftPaddle1": [{"gamepad": "North"}]},
+        games={"42": {"RightPaddle1": [{"key": "KeyEsc"}]}},
+    )
+    inputplumber.set_button(
+        store, FakeDbus(), CLAW, "LeftPaddle1", [{"gamepad": "South"}],
+        "global", None, "42", merge=fake_merge,
+    )
+    assert store.all()["LeftPaddle1"] == [{"gamepad": "South"}]
+    assert seen[-1] == {"RightPaddle1": [{"key": "KeyEsc"}]}
+
+
 def test_ip_set_button_empty_reverts_to_default():
     store = FakeStore({"LeftPaddle1": [{"gamepad": "South"}]})
     inputplumber.set_button(store, FakeDbus(), CLAW, "LeftPaddle1", [{"key": "bad"}])
@@ -106,6 +171,19 @@ def test_ip_reset_clears_and_loads_default():
     inputplumber.reset(store, dbus)
     assert store.all() == {}
     assert dbus.reset_called is True
+
+
+def test_ip_reset_game_deletes_profile_and_reapplies_global():
+    store = FakeStore(
+        {"RightPaddle1": [{"key": "KeyEsc"}]},
+        games={"42": {"LeftPaddle1": [{"gamepad": "South"}]}},
+    )
+    dbus = FakeDbus()
+    fake_merge = lambda baseline, overrides: "merged-yaml"  # noqa: E731
+    cfg = inputplumber.reset(store, dbus, CLAW, "game", "42", "42", merge=fake_merge)
+    assert store.has_game("42") is False
+    assert cfg["has_game_profile"] is False
+    assert cfg["buttons"] == cfg["global_buttons"]
 
 
 # ---- HHD config ------------------------------------------------------------
