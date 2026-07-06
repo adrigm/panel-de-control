@@ -40,9 +40,9 @@ export function startGameWatcher(): () => void {
   let startupTimer: ReturnType<typeof setInterval> | null = null;
   let eventFallbackTimer: ReturnType<typeof setInterval> | null = null;
   let lastAppid: string | null = null;
-  // The appid currently being sent to the backend (in-flight), so overlapping
-  // ticks/events don't fire duplicate RPCs for the same target.
-  let inFlight: string | null = null;
+  // The appid currently being sent to the backend. `undefined` means idle, so
+  // `null` stays available as the real "no game running" value to report.
+  let inFlight: string | null | undefined;
   let sawRealAppid = false; // have we ever SUCCESSFULLY reported a non-null appid?
   let startupTicks = 0;
 
@@ -66,7 +66,7 @@ export function startGameWatcher(): () => void {
           if (!alive) return;
           // Commit ONLY on success, so a failed report retries next tick.
           lastAppid = appid;
-          inFlight = null;
+          inFlight = undefined;
           if (appid !== null) {
             sawRealAppid = true;
             stopStartupPoll(); // got a real game → startup retries no longer needed
@@ -74,11 +74,11 @@ export function startGameWatcher(): () => void {
         })
         .catch(() => {
           // Backend not ready / RPC failed → do NOT commit; allow a retry.
-          if (inFlight === appid) inFlight = null;
+          if (inFlight === appid) inFlight = undefined;
         });
     } catch {
       // setCurrentGame threw synchronously (API missing) → allow a retry.
-      if (inFlight === appid) inFlight = null;
+      if (inFlight === appid) inFlight = undefined;
     }
   };
 
